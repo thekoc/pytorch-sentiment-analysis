@@ -544,4 +544,4 @@ def predict_cnn():
 
 
 # train_cnn()
-train_cnn()
+train_rnn()
