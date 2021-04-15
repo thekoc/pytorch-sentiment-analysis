@@ -6,7 +6,7 @@ from torch import nn
 from torchtext.data import get_tokenizer
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
-from torch.nn.functional import relu, max_pool1d
+from torch.nn.functional import dropout, relu, max_pool1d
 
 vector = torchtext.vocab.GloVe()
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -16,18 +16,29 @@ torch.manual_seed(SEED)
 
 TRAIN_SAMPLE_SIZE = None
 
+class LSTM(nn.Module):
+    def __init__(self, embedding_dim, hidden_dim, output_dim):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.lstm = nn.LSTM(embedding_dim, hidden_dim, batch_first=True, num_layers=2, dropout=0.4)
+        self.fc = nn.Linear(hidden_dim, output_dim)
+    
+    def forward(self, x):
+        output, (hn, cn) = self.lstm(x)
+        return self.fc(output[:, -1, :])
+
 class RNN(nn.Module):
     def __init__(self, embedding_dim, hidden_dim, output_dim):
         
         super().__init__()
         self.hidden_dim = hidden_dim
-        self.rnn = nn.RNN(embedding_dim, hidden_dim, batch_first=True)
+        self.rnn = nn.RNN(embedding_dim, hidden_dim, batch_first=True, num_layers=2)
         
         self.fc = nn.Linear(hidden_dim, output_dim)
         
     def forward(self, x):
         output, hidden = self.rnn(x)
-        return self.fc(hidden.squeeze(0))
+        return self.fc(output[:, -1, :])
 
 class CNN(nn.Module):
     def __init__(self, embedding_dim, n_filters, filter_sizes, output_dim, 
@@ -284,6 +295,8 @@ def load_data_semeval_join():
     train_dataset = TextDataset([d[0] for d in train_data], [d[1] for d in train_data])
 
 
+    train_dataset = train_dataset.sample(TRAIN_SAMPLE_SIZE)
+
     return test_dataset, train_dataset, test_dataset
 
 
@@ -338,7 +351,8 @@ def train(model, iterator, optimizer, criterion, train_length):
         total_trained += len(batch['labels'])
         rounds += 1
         if rounds % 20 == 0:
-            print(f'{100 * total_trained/train_length:.2f}')
+            # print(f'{100 * total_trained/train_length:.2f}')
+            pass
         optimizer.zero_grad()
         predictions = model(batch['X']).squeeze(1)
         
@@ -386,12 +400,80 @@ def epoch_time(start_time, end_time):
     elapsed_secs = int(elapsed_time - (elapsed_mins * 60))
     return elapsed_mins, elapsed_secs
 
+def create_model_lstm():
+    EMBEDDING_DIM = vector.dim
+    HIDDEN_DIM = 256
+    OUTPUT_DIM = 1
+    model = LSTM(EMBEDDING_DIM, HIDDEN_DIM, OUTPUT_DIM)
+    return model
+
+def create_model_cnn():
+    EMBEDDING_DIM = vector.dim
+    OUTPUT_DIM = 1
+    
+    model = CNN(EMBEDDING_DIM, 200, (3,4,5, 5), OUTPUT_DIM, 0.5)
+    return model
+
+def train_lstm():
+    BATCH_SIZE = 64
+
+
+    val_set, train_set, test_set = load_data_semeval_join()
+    print('loaded')
+    val_iterator = DataLoader(val_set, BATCH_SIZE, collate_fn=collate_fn)
+    train_iterator = DataLoader(train_set, BATCH_SIZE, collate_fn=collate_fn)
+    test_iterator = DataLoader(test_set, BATCH_SIZE, collate_fn=collate_fn)
+
+    train_length = len(train_set)
+
+    model = create_model_lstm()
+    optimizer = torch.optim.Adam(model.parameters())
+
+    loss = nn.BCEWithLogitsLoss()
+
+    model = model.to(device)
+    loss = loss.to(device)
+    N_EPOCHS = 100
+
+    best_valid_loss = float('inf')
+
+    loss_history = [] # Seuqnece[(train, val, test)]
+    acc_history = []
+
+    for epoch in range(N_EPOCHS):
+
+        start_time = time.time()
+        
+        train_loss, train_acc = train(model, train_iterator, optimizer, loss, train_length)
+        valid_loss, valid_acc = evaluate(model, val_iterator, loss)
+        test_loss, test_acc = evaluate(model, test_iterator, loss)
+        
+        loss_history.append((train_loss, valid_loss, test_loss))
+        acc_history.append((train_acc, valid_acc, test_acc))
+        
+        end_time = time.time()
+
+        epoch_mins, epoch_secs = epoch_time(start_time, end_time)
+        
+        if valid_loss < best_valid_loss:
+            best_valid_loss = valid_loss
+            torch.save(model.state_dict(), 'lstm-model.pt')
+        
+        print(f'Epoch: {epoch+1:02} | Epoch Time: {epoch_mins}m {epoch_secs}s')
+        print(f'\tTrain Loss: {train_loss:.3f} | Train Acc: {train_acc*100:.2f}%')
+        print(f'\t Val. Loss: {valid_loss:.3f} |  Val. Acc: {valid_acc*100:.2f}%')
+        print(f'\t Test. Loss: {test_loss:.3f} |  Test. Acc: {test_acc*100:.2f}%')
+    print('loss history')
+    print(loss_history)
+    print('acc history')
+    print(acc_history)
+
 
 def train_rnn():
     BATCH_SIZE = 64
 
 
-    val_set, train_set, test_set = load_data_semeval()
+    val_set, train_set, test_set = load_data_semeval_join()
     print('loaded')
     val_iterator = DataLoader(val_set, BATCH_SIZE, collate_fn=collate_fn)
     train_iterator = DataLoader(train_set, BATCH_SIZE, collate_fn=collate_fn)
@@ -407,13 +489,13 @@ def train_rnn():
 
     model = RNN(EMBEDDING_DIM, HIDDEN_DIM, OUTPUT_DIM)
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
+    optimizer = torch.optim.Adam(model.parameters())
 
     loss = nn.BCEWithLogitsLoss()
 
     model = model.to(device)
     loss = loss.to(device)
-    N_EPOCHS = 5
+    N_EPOCHS = 50
 
     best_valid_loss = float('inf')
 
@@ -460,11 +542,7 @@ def train_cnn():
     train_iterator = DataLoader(train_set, BATCH_SIZE, collate_fn=collate_fn)
     test_iterator = DataLoader(test_set, BATCH_SIZE, collate_fn=collate_fn)
 
-
-    EMBEDDING_DIM = vector.dim
-    OUTPUT_DIM = 1
-    
-    model = CNN(EMBEDDING_DIM, 100, (3,4,5), OUTPUT_DIM, 0.5)
+    model = create_model_cnn()
     optimizer =  torch.optim.Adam(model.parameters())
 
     criterion = nn.BCEWithLogitsLoss()
@@ -472,7 +550,7 @@ def train_cnn():
     model = model.to(device)
     criterion = criterion.to(device)
 
-    N_EPOCHS = 8
+    N_EPOCHS = 20
 
     best_valid_loss = float('inf')
     loss_history = [] # Seuqnece[(train, val, test)]
@@ -513,19 +591,21 @@ def predict(X, model):
         return predictions
 
 
-def load_model(path):
-    EMBEDDING_DIM = vector.dim
-    OUTPUT_DIM = 1
-    
-    model = CNN(EMBEDDING_DIM, 100, (3,4,5), OUTPUT_DIM, 0.5)
+def load_model_cnn(path):
+    model = create_model_cnn()
+    model.load_state_dict(torch.load(path))
+    model.eval()
+    return model
+
+def load_model_lstm(path):
+    model = create_model_lstm()
     model.load_state_dict(torch.load(path))
     model.eval()
     return model
 
 
-
 def predict_cnn():
-    model = load_model('cnn-model.pt')
+    model = load_model_cnn('cnn-model.pt')
     tokenize = get_tokenizer("basic_english")
     min_length = 10
     while True:
@@ -543,5 +623,24 @@ def predict_cnn():
     # print(evaluate(model, test_iterator, nn.BCEWithLogitsLoss()))
 
 
+def predict_lstm():
+    model = load_model_lstm('lstm-model.pt')
+    tokenize = get_tokenizer("basic_english")
+    min_length = 10
+    while True:
+        text = input('Please input: ')
+        x = vector.get_vecs_by_tokens(tokenize(text)).to(device).squeeze(1)
+        if x.size(0) < min_length:
+            padded = torch.zeros((min_length, x.size(1)))
+            padded[:x.size(0), :] = x
+            x = padded
+        X = x.unsqueeze(0)
+        print(predict(X, model))
+    # val_set, train_set, test_set = load_data_semeval()
+    # BATCH_SIZE = 64
+    # test_iterator = DataLoader(test_set, BATCH_SIZE, collate_fn=collate_fn)
+    # print(evaluate(model, test_iterator, nn.BCEWithLogitsLoss()))
+
 # train_cnn()
-train_rnn()
+predict_cnn()
+# predict_lstm()
