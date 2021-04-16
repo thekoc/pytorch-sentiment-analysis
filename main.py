@@ -1,4 +1,6 @@
 import random
+import sys
+
 import torch
 import torchtext
 from torch.utils.data import random_split, DataLoader
@@ -32,7 +34,7 @@ class RNN(nn.Module):
         
         super().__init__()
         self.hidden_dim = hidden_dim
-        self.rnn = nn.RNN(embedding_dim, hidden_dim, batch_first=True, num_layers=2)
+        self.rnn = nn.RNN(embedding_dim, hidden_dim, batch_first=True, num_layers=1)
         
         self.fc = nn.Linear(hidden_dim, output_dim)
         
@@ -411,7 +413,18 @@ def create_model_cnn():
     EMBEDDING_DIM = vector.dim
     OUTPUT_DIM = 1
     
-    model = CNN(EMBEDDING_DIM, 200, (3,4,5, 5), OUTPUT_DIM, 0.5)
+    model = CNN(EMBEDDING_DIM, 200, (3, 4, 5, 5), OUTPUT_DIM, 0.5)
+    return model
+
+def create_model_rnn():
+
+    EMBEDDING_DIM = vector.dim
+    HIDDEN_DIM = 512
+    OUTPUT_DIM = 1
+
+
+
+    model = RNN(EMBEDDING_DIM, HIDDEN_DIM, OUTPUT_DIM)
     return model
 
 def train_lstm():
@@ -433,7 +446,7 @@ def train_lstm():
 
     model = model.to(device)
     loss = loss.to(device)
-    N_EPOCHS = 100
+    N_EPOCHS = 50
 
     best_valid_loss = float('inf')
 
@@ -480,22 +493,15 @@ def train_rnn():
     test_iterator = DataLoader(test_set, BATCH_SIZE, collate_fn=collate_fn)
 
     train_length = len(train_set)
+    model = create_model_rnn()
 
-    EMBEDDING_DIM = vector.dim
-    HIDDEN_DIM = 256
-    OUTPUT_DIM = 1
-
-
-
-    model = RNN(EMBEDDING_DIM, HIDDEN_DIM, OUTPUT_DIM)
-
-    optimizer = torch.optim.Adam(model.parameters())
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
 
     loss = nn.BCEWithLogitsLoss()
 
     model = model.to(device)
     loss = loss.to(device)
-    N_EPOCHS = 50
+    N_EPOCHS = 100
 
     best_valid_loss = float('inf')
 
@@ -550,7 +556,7 @@ def train_cnn():
     model = model.to(device)
     criterion = criterion.to(device)
 
-    N_EPOCHS = 20
+    N_EPOCHS = 30
 
     best_valid_loss = float('inf')
     loss_history = [] # Seuqnece[(train, val, test)]
@@ -603,6 +609,12 @@ def load_model_lstm(path):
     model.eval()
     return model
 
+def load_model_rnn(path):
+    model = create_model_rnn()
+    model.load_state_dict(torch.load(path))
+    model.eval()
+    return model
+
 
 def predict_cnn():
     model = load_model_cnn('cnn-model.pt')
@@ -610,13 +622,15 @@ def predict_cnn():
     min_length = 10
     while True:
         text = input('Please input: ')
-        x = vector.get_vecs_by_tokens(tokenize(text)).to(device).squeeze(1)
-        if x.size(0) < min_length:
-            padded = torch.zeros((min_length, x.size(1)))
-            padded[:x.size(0), :] = x
-            x = padded
-        X = x.unsqueeze(0)
-        print(predict(X, model))
+        if text:
+            x = vector.get_vecs_by_tokens(tokenize(text)).to(device).squeeze(1)
+            x = vector.get_vecs_by_tokens(tokenize(text)).to(device).squeeze(1)
+            if x.size(0) < min_length:
+                padded = torch.zeros((min_length, x.size(1)))
+                padded[:x.size(0), :] = x
+                x = padded
+            X = x.unsqueeze(0)
+            print(predict(X, model))
     # val_set, train_set, test_set = load_data_semeval()
     # BATCH_SIZE = 64
     # test_iterator = DataLoader(test_set, BATCH_SIZE, collate_fn=collate_fn)
@@ -629,18 +643,58 @@ def predict_lstm():
     min_length = 10
     while True:
         text = input('Please input: ')
-        x = vector.get_vecs_by_tokens(tokenize(text)).to(device).squeeze(1)
-        if x.size(0) < min_length:
-            padded = torch.zeros((min_length, x.size(1)))
-            padded[:x.size(0), :] = x
-            x = padded
-        X = x.unsqueeze(0)
-        print(predict(X, model))
+        if text:
+            x = vector.get_vecs_by_tokens(tokenize(text)).to(device).squeeze(1)
+            x = vector.get_vecs_by_tokens(tokenize(text)).to(device).squeeze(1)
+            if x.size(0) < min_length:
+                padded = torch.zeros((min_length, x.size(1)))
+                padded[:x.size(0), :] = x
+                x = padded
+            X = x.unsqueeze(0)
+            print(predict(X, model))
     # val_set, train_set, test_set = load_data_semeval()
     # BATCH_SIZE = 64
     # test_iterator = DataLoader(test_set, BATCH_SIZE, collate_fn=collate_fn)
     # print(evaluate(model, test_iterator, nn.BCEWithLogitsLoss()))
 
-# train_cnn()
-predict_cnn()
-# predict_lstm()
+def predict_rnn():
+    model = load_model_rnn('rnn-model.pt')
+    tokenize = get_tokenizer("basic_english")
+    min_length = 10
+    while True:
+        text = input('Please input: ')
+        if text:
+            x = vector.get_vecs_by_tokens(tokenize(text)).to(device).squeeze(1)
+            x = vector.get_vecs_by_tokens(tokenize(text)).to(device).squeeze(1)
+            if x.size(0) < min_length:
+                padded = torch.zeros((min_length, x.size(1)))
+                padded[:x.size(0), :] = x
+                x = padded
+            X = x.unsqueeze(0)
+            print(predict(X, model))
+    # val_set, train_set, test_set = load_data_semeval()
+    # BATCH_SIZE = 64
+    # test_iterator = DataLoader(test_set, BATCH_SIZE, collate_fn=collate_fn)
+    # print(evaluate(model, test_iterator, nn.BCEWithLogitsLoss()))
+
+def main():
+    assert len(sys.argv) == 3
+    cmd = sys.argv[1]
+    model = sys.argv[2]
+    cmd_dict = {
+        'train': {
+            'cnn': train_cnn,
+            'lstm': train_lstm,
+            'rnn': train_rnn,
+        },
+        'predict': {
+            'cnn': predict_cnn,
+            'lstm': predict_lstm,
+            'rnn': predict_rnn,
+        }
+    }
+    run = cmd_dict.get(cmd, {}).get(model)
+    if run:
+        run()
+
+main()
